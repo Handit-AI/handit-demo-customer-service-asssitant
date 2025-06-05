@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Container, Typography, Grid } from "@mui/material";
 import ChatWindow from "../components/ChatWindow";
 import TechChatWindow from "../components/TechChatWindow";
+import TestInstructions from "../components/TestInstructions";
 
 const Chat = () => {
   return (
@@ -34,6 +35,8 @@ const Chat = () => {
             Experience the difference
           </Typography>
         </Box>
+
+        <TestInstructions />
 
         <Box sx={{ 
           display: 'grid',
