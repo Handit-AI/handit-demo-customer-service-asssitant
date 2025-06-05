@@ -1,0 +1,25 @@
+{
+  "name": "customer-service-agent",
+  "version": "1.0.0",
+  "description": "A customer service agent using LangChain and Pinecone",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "init-pinecone": "node src/scripts/initPinecone.js"
+  },
+  "dependencies": {
+    "@handit.ai/node": "^1.1.1",
+    "@pinecone-database/pinecone": "^6.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^5.1.0",
+    "langchain": "^0.3.27",
+    "morgan": "^1.10.0",
+    "openai": "^5.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
