@@ -1,9 +1,8 @@
 import React, { useState } from "react";
-import { Box, Switch, Typography } from "@mui/material";
-import ChatHeader from "./ChatHeader";
+import { Box, Typography, Switch } from "@mui/material";
 import MessageList from "./MessageList";
 import ChatInput from "./ChatInput";
-import { generateResponse } from "../services/chatService";
+import { generateEnhancedResponse } from "../services/chatService";
 
 const TechChatWindow = () => {
   const [messages, setMessages] = useState([
@@ -26,13 +25,13 @@ const TechChatWindow = () => {
 
       setIsLoading(true);
 
-      const response = await generateResponse(text);
+      const response = await generateEnhancedResponse(text);
 
       setMessages((prev) => [
         ...prev,
         {
           id: prev.length + 1,
-          text: response.answer || "I couldn't understand that.",
+          text: response.answer,
           sender: "bot",
         },
       ]);
@@ -41,7 +40,9 @@ const TechChatWindow = () => {
         ...prev,
         {
           id: prev.length + 1,
-          text: error.message || "Sorry, there was an error processing your message.",
+          text:
+            error.message ||
+            "Sorry, there was an error processing your message.",
           sender: "bot",
         },
       ]);
@@ -56,35 +57,38 @@ const TechChatWindow = () => {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        backgroundColor: '#fff',
-        maxWidth: '100%',
-        overflow: 'hidden',
+        backgroundColor: "#fff",
+        maxWidth: "100%",
+        overflow: "hidden",
       }}
     >
-      <Box sx={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center',
-        padding: '16px 20px',
-        borderBottom: '1px solid rgba(0, 0, 0, 0.08)',
-        backgroundColor: '#fff',
-        flexShrink: 0,
-      }}>
-        <Typography variant="h6" sx={{ color: '#334155', fontWeight: 600 }}>
+      <Box
+        sx={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "16px 20px",
+          borderBottom: "1px solid rgba(0, 0, 0, 0.08)",
+          backgroundColor: "#fff",
+          flexShrink: 0,
+        }}
+      >
+        <Typography variant="h6" sx={{ color: "#334155", fontWeight: 600 }}>
           Customer Service Assistant
         </Typography>
-        <Box sx={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: 1.5,
-          padding: '6px 12px',
-          borderRadius: '8px',
-          backgroundColor: '#f1f4f9',
-        }}>
-          <Typography 
-            variant="body2" 
-            sx={{ 
-              color: '#4f46e5',
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            padding: "6px 12px",
+            borderRadius: "8px",
+            backgroundColor: "#f1f4f9",
+          }}
+        >
+          <Typography
+            variant="body2"
+            sx={{
+              color: "#4f46e5",
               fontWeight: 500,
             }}
           >
@@ -96,6 +100,7 @@ const TechChatWindow = () => {
             color="primary"
             size="small"
             sx={{
+              ml: 1,
               '& .MuiSwitch-switchBase.Mui-checked': {
                 color: '#4f46e5',
               },
@@ -106,10 +111,15 @@ const TechChatWindow = () => {
           />
         </Box>
       </Box>
-      <MessageList messages={messages} isLoading={isLoading} />
+      <MessageList
+        messages={messages}
+        isLoading={isLoading}
+        userMessageColor="#4f46e5"
+        botMessageColor="#f1f4f9"
+      />
       <ChatInput onSend={handleSendMessage} />
     </Box>
   );
 };
 
-export default TechChatWindow; 
+export default TechChatWindow;

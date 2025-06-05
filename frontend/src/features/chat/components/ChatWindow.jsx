@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Box, Typography } from "@mui/material";
 import MessageList from "./MessageList";
 import ChatInput from "./ChatInput";
-import { generateResponse } from "../services/chatService";
+import { generateSimpleResponse } from "../services/chatService";
 
 const ChatWindow = () => {
   const [messages, setMessages] = useState([
@@ -24,13 +24,13 @@ const ChatWindow = () => {
 
       setIsLoading(true);
 
-      const response = await generateResponse(text);
+      const response = await generateSimpleResponse(text);
 
       setMessages((prev) => [
         ...prev,
         {
           id: prev.length + 1,
-          text: response.answer || "I couldn't understand that.",
+          text: response.answer,
           sender: "bot",
         },
       ]);

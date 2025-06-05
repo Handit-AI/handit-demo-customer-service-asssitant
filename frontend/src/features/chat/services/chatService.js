@@ -1,38 +1,65 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:3000';
+const API_BASE_URL = 'http://localhost:3000/api';
 
 const chatApi = axios.create({
-    baseURL: API_URL,
+    baseURL: API_BASE_URL,
     headers: {
         'Content-Type': 'application/json'
-    },
-    // Remove withCredentials since we're not using cookies
-    withCredentials: false
+    }
 });
 
-// Add response interceptor for better error handling
-chatApi.interceptors.response.use(
-    response => response,
-    error => {
-        if (error.response?.status === 500) {
-            console.error('Server error:', error.response.data.detail);
-        }
-        return Promise.reject(error);
-    }
-);
-
-export const generateResponse = async (message) => {
+/**
+ * Generate a response for the standard chat without Handit tracing
+ * @param {string} message - The user's message
+ * @returns {Promise<Object>} The response data
+ */
+export const generateSimpleResponse = async (message) => {
     try {
-        const { data } = await chatApi.post('api/chat', { message });
+        const { data } = await chatApi.post('/chat/simple', {
+            message
+        });
 
-        // The server returns { status: 'success', data: { response, intent } }
-        return {
-            answer: data.data.response.response,  // Access the nested response
-            timestamp: new Date().toISOString()
-        };
+        if (data.status === 'success' && data.data?.response?.response) {
+            return {
+                answer: data.data.response.response,
+                timestamp: new Date().toISOString()
+            };
+        }
+
+        throw new Error(data.error || 'Failed to get response');
+
     } catch (error) {
-        console.error('Error generating response:', error);
-        throw new Error(error.response?.data?.message || 'Failed to generate response');
+        if (error.response?.data?.error) {
+            throw new Error(error.response.data.error);
+        }
+        throw new Error('Failed to connect to the chat service');
+    }
+};
+
+/**
+ * Generate a response for the AI-enhanced chat with Handit tracing
+ * @param {string} message - The user's message
+ * @returns {Promise<Object>} The response data
+ */
+export const generateEnhancedResponse = async (message) => {
+    try {
+        const { data } = await chatApi.post('/chat', {
+            message
+        });
+
+        if (data.status === 'success' && data.data?.response?.response) {
+            return {
+                answer: data.data.response.response,
+                timestamp: new Date().toISOString()
+            };
+        }
+
+        throw new Error(data.error || 'Failed to get response');
+    } catch (error) {
+        if (error.response?.data?.error) {
+            throw new Error(error.response.data.error);
+        }
+        throw new Error('Failed to connect to the enhanced chat service');
     }
 };
