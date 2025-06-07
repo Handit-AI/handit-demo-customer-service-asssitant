@@ -7,15 +7,16 @@ dotenv.config();
 
 /**
  * SimpleCustomerServiceAgent class for processing customer service requests
- * A simplified version without tracing/monitoring
  * 
- * This agent implements a complete workflow for handling customer service requests:
+ * This is the STANDARD implementation without Handit optimization.
+ * It implements a basic workflow for handling customer service requests:
  * 1. Intent Classification: Determines the type of customer request
  * 2. Knowledge Base Search: Retrieves relevant information from Pinecone
  * 3. Response Generation: Creates appropriate responses based on context
  * 
  * @class SimpleCustomerServiceAgent
  */
+
 class SimpleCustomerServiceAgent {
     /**
      * Creates an instance of SimpleCustomerServiceAgent.
@@ -25,14 +26,14 @@ class SimpleCustomerServiceAgent {
      * @throws {Error} If required environment variables are missing
      */
     constructor() {
-        // Initialize LLM for intent classification and response generation
+        // Initialize LLM 
         this.llm = new ChatOpenAI({
-            modelName: 'gpt-4',
-            temperature: 0.4,
-            openAIApiKey: process.env.OPENAI_API_KEY
+            modelName: 'gpt-4',  // Using GPT-4 model
+            temperature: 0.4,    // Lower temperature for more focused responses
+            openAIApiKey: process.env.OPENAI_API_KEY  // API key from environment variables
         });
 
-        // Initialize embeddings
+        // Initialize embeddings service for vector operations
         this.embeddings = new OpenAIEmbeddings({
             openAIApiKey: process.env.OPENAI_API_KEY
         });
@@ -48,8 +49,10 @@ class SimpleCustomerServiceAgent {
      */
     async initializePinecone() {
         try {
+            // Initialize Pinecone client and get index reference
             const { index } = await initializePinecone();
             this.index = index;
+            // Create/get namespace for customer service knowledge base
             this.namespace = index.namespace("customer-service-kb");
         } catch (error) {
             console.error('❌ Error initializing vector store:', error);
@@ -67,18 +70,19 @@ class SimpleCustomerServiceAgent {
      * @throws {Error} If classification fails
      */
     async classifyIntent(userMessage) {
+        // Define the prompt for intent classification
         const prompt = `
-        You are a customer service intent classifier. Your task is to classify the following customer message into one of these categories:
+        Classify this customer message into categories:
         - support_request
-        - billing_inquiry
+        - billing_inquiry  
         - product_question
         - complaint
-
+        
         IMPORTANT: You must respond ONLY with a valid JSON object, nothing else.
+
+        Customer Message: ${userMessage}
         
-        Message: ${userMessage}
-        
-        Expected JSON format:
+        Return JSON:
         {
             "userMessage": "${userMessage}",
             "intent": "category",
@@ -87,15 +91,29 @@ class SimpleCustomerServiceAgent {
         `;
 
         try {
-            const response = await this.llm.predict(prompt);
-            
-            // Clean the response to ensure it's valid JSON
-            const cleanedResponse = response.trim().replace(/^[^{]*/, '').replace(/[^}]*$/, '');
-            
+            // Structure the messages for better control
+            const messages = [
+                {
+                    role: "system",
+                    content: prompt
+                },
+                {
+                    role: "user",
+                    content: `Customer Message: ${userMessage}`
+                }
+            ];
+
+            // Get response from LLM with structured messages
+            const response = await this.llm.invoke(messages);
+
+            // Clean the response by removing any non-JSON content
+            const cleanedResponse = response.content.trim().replace(/^[^{]*/, '').replace(/[^}]*$/, '');
+
             try {
+                // Parse the cleaned response into JSON
                 const parsedResponse = JSON.parse(cleanedResponse);
-                
-                // Validate the response structure
+
+                // Validate that all required fields are present
                 if (!parsedResponse.intent || !parsedResponse.confidence || !parsedResponse.userMessage) {
                     throw new Error('Invalid response structure');
                 }
@@ -103,7 +121,7 @@ class SimpleCustomerServiceAgent {
                 return parsedResponse;
             } catch (parseError) {
                 console.error('❌ Error parsing LLM response:', parseError);
-                console.error('Raw response:', response);
+                console.error('Raw response:', response.content);
                 throw new Error('Failed to parse LLM response as JSON');
             }
         } catch (error) {
@@ -125,17 +143,18 @@ class SimpleCustomerServiceAgent {
      */
     async searchKnowledgeBase(intent) {
         try {
-            // Generate embedding for the query
+            // Convert user message to vector embedding for similarity search
             const queryEmbedding = await this.embeddings.embedQuery(intent.userMessage);
 
-            // Search vector store for relevant documents
+            // Search Pinecone vector store for similar documents
             const results = await this.namespace.query({
                 vector: queryEmbedding,
-                topK: 3,
-                includeMetadata: true
+                topK: 3,  // Get top 3 most relevant results
+                includeMetadata: true  // Include document metadata in results
             });
 
-            return {
+            // Format search results
+            const searchResults = {
                 results: results.matches.map(match => ({
                     pageContent: match.metadata.text,
                     metadata: match.metadata
@@ -143,6 +162,8 @@ class SimpleCustomerServiceAgent {
                 count: results.matches.length,
                 intent
             };
+
+            return searchResults;
         } catch (error) {
             console.error('❌ Error searching knowledge base:', error);
             throw error;
@@ -157,45 +178,48 @@ class SimpleCustomerServiceAgent {
      * @param {Object} context - The context object from knowledge search
      * @param {Array} context.results - The search results
      * @param {Object} context.intent - The classified intent
-     * @returns {Promise<Object>} Object containing the response and token usage
+     * @returns {Promise<Object>} Object containing the response
      * @throws {Error} If response generation fails
      */
     async generateResponse(context) {
+        // Define prompt for response generation
         const prompt = `
-        Generate a helpful customer service response based on:
+        Generate a customer service response.
         
-        User Message: ${context.intent.userMessage}
+        Question: ${context.intent.userMessage}
         Intent: ${context.intent.intent}
-        Confidence: ${context.intent.confidence}
         Knowledge: ${JSON.stringify(context.results, null, 2)}
         
-        Respond in JSON format:
+        Use this information to help the customer.
+        
+        Response format:
         {
-            "response": "your response here"
+            "response": "helpful response here"
         }
         `;
 
         try {
-            // Get input tokens
-            const inputTokens = await this.llm.getNumTokens(prompt);
+            // Structure the messages for better control
+            const messages = [
+                {
+                    role: "system",
+                    content: prompt
+                },
+                {
+                    role: "user",
+                    content: `Customer Message: ${context.intent.userMessage}`
+                }
+            ];
 
-            // Generate response
-            const response = await this.llm.predict(prompt);
+            // Get response from LLM with structured messages
+            const response = await this.llm.invoke(messages);
 
-            const cleanedResponse = response.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+            // Clean and parse the response
+            const cleanedResponse = response.content.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
             const parsedResponse = JSON.parse(cleanedResponse);
 
-            // Get output tokens
-            const outputTokens = await this.llm.getNumTokens(response);
+            return parsedResponse;
 
-            return {
-                ...parsedResponse,
-                tokenUsage: {
-                    promptTokens: inputTokens,
-                    completionTokens: outputTokens,
-                    totalTokens: inputTokens + outputTokens
-                }
-            };
         } catch (error) {
             console.error('❌ Error generating response:', error);
             throw error;
@@ -208,20 +232,20 @@ class SimpleCustomerServiceAgent {
      * @async
      * @method processCustomerRequest
      * @param {string} userMessage - The customer's message
-     * @returns {Promise<Object>} Object containing the response and intent
+     * @returns {Promise<Object>} Object containing the response, intent, and user ID
      * @throws {Error} If any step in the process fails
      */
     async processCustomerRequest(userMessage) {
         try {
-            // Step 1: Classify intent
+            // Step 1: Classify the intent of the user's message
             const intent = await this.classifyIntent(userMessage);
             console.log('🎯 Intent classified:', intent);
 
-            // Step 2: Search knowledge base
+            // Step 2: Search knowledge base for relevant information
             const context = await this.searchKnowledgeBase(intent);
             console.log('🔍 Knowledge base search results:', context);
 
-            // Step 3: Generate response
+            // Step 3: Generate appropriate response using context
             const response = await this.generateResponse(context);
             console.log('💬 Generated response:', response);
 
@@ -229,6 +253,7 @@ class SimpleCustomerServiceAgent {
                 response,
                 intent
             };
+
         } catch (error) {
             console.error('❌ Error processing request:', error);
             throw error;
@@ -237,23 +262,28 @@ class SimpleCustomerServiceAgent {
 }
 
 /**
- * Process a customer service request using the simple agent
+ * Example usage of the SimpleCustomerServiceAgent
  * 
  * @async
- * @function processSimpleRequest
+ * @function main
  * @param {string} userMessage - The message from the user to process
- * @returns {Promise<Object>} The processed response
  * @throws {Error} If agent initialization or request processing fails
  */
-async function processSimpleRequest(userMessage) {
+async function processRequest(userMessage) {
     try {
+        // Initialize agent and vector store
         const agent = new SimpleCustomerServiceAgent();
         await agent.initializePinecone();
-        return await agent.processCustomerRequest(userMessage);
+
+        // Process the user's request
+        const result = await agent.processCustomerRequest(userMessage);
+
+        console.log('✨ Final Result:', result);
+        return result;
     } catch (error) {
-        console.error('❌ Error in processSimpleRequest:', error);
+        console.error('❌ Error in main:', error);
         throw error;
     }
 }
 
-export { SimpleCustomerServiceAgent, processSimpleRequest }; 
+export { processRequest }; 

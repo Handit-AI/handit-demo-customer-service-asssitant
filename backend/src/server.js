@@ -11,8 +11,8 @@
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
-import { main } from './agent.js';
-import { processSimpleRequest } from './simpleAgent.js';
+import { processRequestVersion2 } from './agent.js';
+import { processRequest } from './simpleAgent.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -48,7 +48,7 @@ app.post('/api/chat', async (req, res) => {
         }
 
         // Call main function with the user message
-        const result = await main(message);
+        const result = await processRequestVersion2(message);
 
         res.json({ 
             status: 'success',
@@ -82,7 +82,7 @@ app.post('/api/chat/simple', async (req, res) => {
         }
 
         // Call simple agent function with the user message
-        const result = await processSimpleRequest(message);
+        const result = await processRequest(message);
 
         res.json({ 
             status: 'success',

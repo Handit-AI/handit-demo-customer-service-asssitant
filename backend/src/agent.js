@@ -2,7 +2,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { OpenAIEmbeddings } from '@langchain/openai';
 import { initializePinecone } from './config/pinecone.js';
 import dotenv from 'dotenv';
-import { startTracing, trackNode, endTracing } from '@handit.ai/node'
+import { startTracing, trackNode, endTracing, fetchOptimizedPrompt } from '@handit.ai/node'
 import '../handitService.js';  // Importar la configuración de Handit
 
 dotenv.config();
@@ -27,14 +27,14 @@ class CustomerServiceAgent {
      * @throws {Error} If required environment variables are missing
      */
     constructor() {
-        // Initialize LLM for intent classification and response generation
+        // Initialize LLM 
         this.llm = new ChatOpenAI({
-            modelName: 'gpt-4',
-            temperature: 0.4,
-            openAIApiKey: process.env.OPENAI_API_KEY
+            modelName: 'gpt-4',  // Using GPT-4 model
+            temperature: 0.4,    // Lower temperature for more focused responses
+            openAIApiKey: process.env.OPENAI_API_KEY  // API key from environment variables
         });
 
-        // Initialize embeddings
+        // Initialize embeddings service for vector operations
         this.embeddings = new OpenAIEmbeddings({
             openAIApiKey: process.env.OPENAI_API_KEY
         });
@@ -50,8 +50,10 @@ class CustomerServiceAgent {
      */
     async initializePinecone() {
         try {
+            // Initialize Pinecone client and get index reference
             const { index } = await initializePinecone();
             this.index = index;
+            // Create/get namespace for customer service knowledge base
             this.namespace = index.namespace("customer-service-kb");
         } catch (error) {
             console.error('❌ Error initializing vector store:', error);
@@ -69,18 +71,19 @@ class CustomerServiceAgent {
      * @throws {Error} If classification fails
      */
     async classifyIntent(userMessage, executionId) {
+        // Define the prompt for intent classification
         const prompt = `
-        You are a customer service intent classifier. Your task is to classify the following customer message into one of these categories:
+        Classify this customer message into categories:
         - support_request
-        - billing_inquiry
+        - billing_inquiry  
         - product_question
         - complaint
-
+        
         IMPORTANT: You must respond ONLY with a valid JSON object, nothing else.
+
+        Customer Message: ${userMessage}
         
-        Message: ${userMessage}
-        
-        Expected JSON format:
+        Return JSON:
         {
             "userMessage": "${userMessage}",
             "intent": "category",
@@ -89,32 +92,66 @@ class CustomerServiceAgent {
         `;
 
         try {
-            const response = await this.llm.predict(prompt);
-            
-            // Clean the response to ensure it's valid JSON
-            const cleanedResponse = response.trim().replace(/^[^{]*/, '').replace(/[^}]*$/, '');
-            
+            // Fetch optimized prompt from Handit
+            const optimizedPrompt = await fetchOptimizedPrompt({
+                modelId: 'classifyIntent',
+            });
+
+            console.log('🔍 Optimized Prompt:', optimizedPrompt);
+
+            // Use optimized prompt if available, otherwise use the original prompt
+            const bestPrompt = optimizedPrompt !== null && optimizedPrompt !== undefined ? optimizedPrompt : prompt;
+
+            // Structure the messages for better control
+            const messages = [
+                {
+                    role: "system",
+                    content: bestPrompt
+                },
+                {
+                    role: "user",
+                    content: `Customer Message: ${userMessage}`
+                }
+            ];
+
+            // Get response from LLM with structured messages
+            const response = await this.llm.invoke(messages);
+
+            // Clean the response by removing any non-JSON content
+            const cleanedResponse = response.content.trim().replace(/^[^{]*/, '').replace(/[^}]*$/, '');
+
             try {
+                // Parse the cleaned response into JSON
                 const parsedResponse = JSON.parse(cleanedResponse);
-                
-                // Validate the response structure
+
+                // Validate that all required fields are present
                 if (!parsedResponse.intent || !parsedResponse.confidence || !parsedResponse.userMessage) {
                     throw new Error('Invalid response structure');
                 }
 
+                // Track the intent classification operation with Handit
                 await trackNode({
-                    input: { prompt: prompt },
-                    output: parsedResponse,
-                    nodeName: 'classifyIntent',
-                    agentName: 'customer_service_agent',
-                    nodeType: 'llm',
-                    executionId
+                    input: messages, // The input to this operation  
+                    output: parsedResponse, // The output of this operation
+                    nodeName: 'classifyIntent', // Unique identifier for this operation
+                    agentName: 'customer_service_agent', // Name of this AI Application
+                    nodeType: 'llm', // Indicates this is a LLM operation
+                    executionId // Links this operation to the current trace session
                 });
 
                 return parsedResponse;
             } catch (parseError) {
                 console.error('❌ Error parsing LLM response:', parseError);
-                console.error('Raw response:', response);
+                console.error('Raw response:', response.content);
+                // Track the error with Handit
+                await trackNode({
+                    input: { prompt: prompt }, // The input to this operation
+                    output: parseError, // The output of this operation
+                    nodeName: 'classifyIntent', // Unique identifier for this operation
+                    agentName: 'customer_service_agent', // Name of this AI Application
+                    nodeType: 'llm', // Indicates this is a tool operation
+                    executionId // Links this operation to the current trace session
+                });
                 throw new Error('Failed to parse LLM response as JSON');
             }
         } catch (error) {
@@ -136,16 +173,17 @@ class CustomerServiceAgent {
      */
     async searchKnowledgeBase(intent, executionId) {
         try {
-            // Generate embedding for the query
+            // Convert user message to vector embedding for similarity search
             const queryEmbedding = await this.embeddings.embedQuery(intent.userMessage);
 
-            // Search vector store for relevant documents
+            // Search Pinecone vector store for similar documents
             const results = await this.namespace.query({
                 vector: queryEmbedding,
-                topK: 3,
-                includeMetadata: true
+                topK: 3,  // Get top 3 most relevant results
+                includeMetadata: true  // Include document metadata in results
             });
 
+            // Format search results
             const searchResults = {
                 results: results.matches.map(match => ({
                     pageContent: match.metadata.text,
@@ -155,18 +193,28 @@ class CustomerServiceAgent {
                 intent
             };
 
+            // Track the knowledge base search operation with Handit
             await trackNode({
-                input: intent,
-                output: searchResults,
-                nodeName: 'searchKnowledgeBase',
-                agentName: 'customer_service_agent',
-                nodeType: 'tool',
-                executionId
+                input: intent, // The input to this operation
+                output: searchResults, // The output of this operation
+                nodeName: 'searchKnowledgeBase', // Unique identifier for this operation
+                agentName: 'customer_service_agent', // Name of this AI Application
+                nodeType: 'tool', // Indicates this is a tool operation
+                executionId // Links this operation to the current trace session
             });
 
             return searchResults;
         } catch (error) {
             console.error('❌ Error searching knowledge base:', error);
+            // Track the error with Handit
+            await trackNode({
+                input: intent, // The input to this operation
+                output: error, // The output of this operation
+                nodeName: 'searchKnowledgeBase', // Unique identifier for this operation
+                agentName: 'customer_service_agent', // Name of this AI Application
+                nodeType: 'tool', // Indicates this is a tool operation
+                executionId // Links this operation to the current trace session
+            });
             throw error;
         }
     }
@@ -179,59 +227,79 @@ class CustomerServiceAgent {
      * @param {Object} context - The context object from knowledge search
      * @param {Array} context.results - The search results
      * @param {Object} context.intent - The classified intent
-     * @returns {Promise<Object>} Object containing the response and token usage
+     * @returns {Promise<Object>} Object containing the response
      * @throws {Error} If response generation fails
      */
     async generateResponse(context, executionId) {
+        // Define prompt for response generation
         const prompt = `
-        Generate a helpful customer service response based on:
+        Generate a customer service response.
         
-        User Message: ${context.intent.userMessage}
+        Question: ${context.intent.userMessage}
         Intent: ${context.intent.intent}
-        Confidence: ${context.intent.confidence}
         Knowledge: ${JSON.stringify(context.results, null, 2)}
         
-        Respond in JSON format:
+        Use this information to help the customer.
+        
+        Response format:
         {
-            "response": "your response here"
+            "response": "helpful response here"
         }
         `;
 
         try {
-            // Get input tokens
-            const inputTokens = await this.llm.getNumTokens(prompt);
-
-            // Generate response
-            const response = await this.llm.predict(prompt);
-
-            const cleanedResponse = response.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
-            const parsedResponse = JSON.parse(cleanedResponse);
-
-            // Get output tokens
-            const outputTokens = await this.llm.getNumTokens(response);
-
-            const result = {
-                ...parsedResponse,
-                tokenUsage: {
-                    promptTokens: inputTokens,
-                    completionTokens: outputTokens,
-                    totalTokens: inputTokens + outputTokens
-                }
-            };
-
-            await trackNode({
-                input: { prompt: prompt },
-                output: result,
-                nodeName: 'generateResponse',
-                agentName: 'customer_service_agent',
-                nodeType: 'llm',
-                executionId
+            // Fetch optimized prompt from Handit
+            const optimizedPrompt = await fetchOptimizedPrompt({
+                modelId: 'generateResponse',
             });
 
-            return result;
+            console.log('🔍 Optimized Prompt:', optimizedPrompt);
+
+            // Use optimized prompt if available, otherwise use the original prompt
+            const bestPrompt = optimizedPrompt !== null && optimizedPrompt !== undefined ? optimizedPrompt : prompt;
+
+            // Structure the messages for better control
+            const messages = [
+                {
+                    role: "system",
+                    content: bestPrompt
+                },
+                {
+                    role: "user",
+                    content: `Customer Message: ${context.intent.userMessage}`
+                }
+            ];
+
+            // Get response from LLM with structured messages
+            const response = await this.llm.invoke(messages);
+
+            // Clean and parse the response
+            const cleanedResponse = response.content.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+            const parsedResponse = JSON.parse(cleanedResponse);
+
+            // Track the response generation operation with Handit
+            await trackNode({
+                input: messages, // The input to this operation
+                output: parsedResponse, // The output of this operation
+                nodeName: 'generateResponse', // Unique identifier for this operation
+                agentName: 'customer_service_agent', // Name of this AI Application
+                nodeType: 'llm', // Indicates this is a LLM operation
+                executionId // Links this operation to the current trace session
+            });
+
+            return parsedResponse;
 
         } catch (error) {
             console.error('❌ Error generating response:', error);
+            // Track the error with Handit
+            await trackNode({
+                input: { prompt: prompt }, // The input to this operation
+                output: error, // The output of this operation
+                nodeName: 'generateResponse', // Unique identifier for this operation
+                agentName: 'customer_service_agent', // Name of this AI Application
+                nodeType: 'llm', // Indicates this is a tool operation
+                executionId // Links this operation to the current trace session
+            });
             throw error;
         }
     }
@@ -248,24 +316,24 @@ class CustomerServiceAgent {
     async processCustomerRequest(userMessage, executionId) {
         try {
 
-
+            // Track processCustomerRequest operation with Handit
             await trackNode({
-                input: { userMessage: userMessage },
-                nodeName: 'processCustomerRequest',
-                agentName: 'customer_service_agent',
-                nodeType: 'tool',
-                executionId
+                input: { userMessage: userMessage }, // The input to this operation
+                nodeName: 'processCustomerRequest', // Unique identifier for this operation
+                agentName: 'customer_service_agent', // Name of this AI Application
+                nodeType: 'tool', // Indicates this is a tool operation
+                executionId // Links this operation to the current trace session
             });
 
-            // Step 1: Classify intent
+            // Step 1: Classify the intent of the user's message
             const intent = await this.classifyIntent(userMessage, executionId);
             console.log('🎯 Intent classified:', intent);
 
-            // Step 2: Search knowledge base
+            // Step 2: Search knowledge base for relevant information
             const context = await this.searchKnowledgeBase(intent, executionId);
             console.log('🔍 Knowledge base search results:', context);
 
-            // Step 3: Generate response
+            // Step 3: Generate appropriate response using context
             const response = await this.generateResponse(context, executionId);
             console.log('💬 Generated response:', response);
 
@@ -276,10 +344,20 @@ class CustomerServiceAgent {
 
         } catch (error) {
             console.error('❌ Error processing request:', error);
+            // Track the error with Handit
+            await trackNode({
+                input: { userMessage: userMessage }, // The input to this operation
+                output: error, // The output of this operation
+                nodeName: 'processCustomerRequest', // Unique identifier for this operation
+                agentName: 'customer_service_agent', // Name of this AI Application
+                nodeType: 'tool', // Indicates this is a tool operation
+                executionId // Links this operation to the current trace session
+            });
             throw error;
         }
     }
 }
+
 /**
  * Example usage of the CustomerServiceAgent
  * 
@@ -288,25 +366,28 @@ class CustomerServiceAgent {
  * @param {string} userMessage - The message from the user to process
  * @throws {Error} If agent initialization or request processing fails
  */
-async function main(userMessage) {
+async function processRequestVersion2(userMessage) {
     let tracingResponse = null;
     try {
+        // Verify Handit API key is configured
         if (!process.env.HANDIT_API_KEY) {
             throw new Error('HANDIT_API_KEY no está configurada en las variables de entorno');
         }
 
-        // Start a new trace session
+        // Start tracing session with Handit
         tracingResponse = await startTracing({
-            agentName: 'customer_service_agent'
+            agentName: 'customer_service_agent' // Name of this AI Application
         });
 
         console.log('🔍 Tracing Response:', tracingResponse);
-        const executionId = tracingResponse.executionId;
+        const executionId = tracingResponse.executionId; // The execution ID for this trace session
         console.log('🔍 Execution ID:', executionId);
 
+        // Initialize agent and vector store
         const agent = new CustomerServiceAgent();
         await agent.initializePinecone();
 
+        // Process the user's request
         const result = await agent.processCustomerRequest(
             userMessage,
             executionId
@@ -314,10 +395,12 @@ async function main(userMessage) {
 
         console.log('✨ Final Result:', result);
 
+        // End tracing session if it was started
         if (tracingResponse && executionId) {
+            // End the trace session
             await endTracing({
-                executionId: executionId,
-                agentName: 'customer_service_agent'
+                executionId: executionId, // The execution ID for this trace session
+                agentName: 'customer_service_agent' // Name of this AI Application
             });
             console.log('✅ Trace ended successfully');
         }
@@ -325,11 +408,13 @@ async function main(userMessage) {
         return result;
     } catch (error) {
         console.error('❌ Error in main:', error);
+        // Ensure tracing session is ended even if there's an error
         if (tracingResponse?.executionId) {
             try {
+                // End the trace session
                 await endTracing({
-                    executionId: tracingResponse.executionId,
-                    agentName: 'customer_service_agent'
+                    executionId: tracingResponse.executionId, // The execution ID for this trace session
+                    agentName: 'customer_service_agent' // Name of this AI Application
                 });
                 console.log('✅ Trace ended successfully');
             } catch (endError) {
@@ -340,4 +425,4 @@ async function main(userMessage) {
     }
 }
 
-export { CustomerServiceAgent, main }; 
+export { processRequestVersion2 }; 
